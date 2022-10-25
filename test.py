@@ -11,6 +11,8 @@ import numpy as np
 import argparse
 import warnings
 import time
+import imutils
+from imutils.video import VideoStream
 
 from src.anti_spoof_predict import AntiSpoofPredict
 from src.generate_patches import CropImage
@@ -18,10 +20,7 @@ from src.utility import parse_model_name
 warnings.filterwarnings('ignore')
 
 
-SAMPLE_IMAGE_PATH = "./images/sample/"
 
-
-# 因为安卓端APK获取的视频流宽高比为3:4,为了与之一致，所以将宽高比限制为3:4
 def check_image(image):
     height, width, channel = image.shape
     if width/height != 3/4:
@@ -31,61 +30,77 @@ def check_image(image):
         return True
 
 
-def test(image_name, model_dir, device_id):
+def run(input, model_dir, device_id, confirence):
     model_test = AntiSpoofPredict(device_id)
     image_cropper = CropImage()
-    image = cv2.imread(SAMPLE_IMAGE_PATH + image_name)
-    result = check_image(image)
-    if result is False:
-        return
-    image_bbox = model_test.get_bbox(image)
-    prediction = np.zeros((1, 3))
-    test_speed = 0
-    # sum the prediction from single model's result
-    for model_name in os.listdir(model_dir):
-        h_input, w_input, model_type, scale = parse_model_name(model_name)
-        param = {
-            "org_img": image,
-            "bbox": image_bbox,
-            "scale": scale,
-            "out_w": w_input,
-            "out_h": h_input,
-            "crop": True,
-        }
-        if scale is None:
-            param["crop"] = False
-        img = image_cropper.crop(**param)
-        start = time.time()
-        prediction += model_test.predict(img, os.path.join(model_dir, model_name))
-        test_speed += time.time()-start
 
-    # draw result of prediction
-    label = np.argmax(prediction)
-    value = prediction[0][label]/2
-    if label == 1:
-        print("Image '{}' is Real Face. Score: {:.2f}.".format(image_name, value))
-        result_text = "RealFace Score: {:.2f}".format(value)
-        color = (255, 0, 0)
-    else:
-        print("Image '{}' is Fake Face. Score: {:.2f}.".format(image_name, value))
-        result_text = "FakeFace Score: {:.2f}".format(value)
-        color = (0, 0, 255)
-    print("Prediction cost {:.2f} s".format(test_speed))
-    cv2.rectangle(
-        image,
-        (image_bbox[0], image_bbox[1]),
-        (image_bbox[0] + image_bbox[2], image_bbox[1] + image_bbox[3]),
-        color, 2)
-    cv2.putText(
-        image,
-        result_text,
-        (image_bbox[0], image_bbox[1] - 5),
-        cv2.FONT_HERSHEY_COMPLEX, 0.5*image.shape[0]/1024, color)
+    vs = VideoStream(src=input).start()
 
-    format_ = os.path.splitext(image_name)[-1]
-    result_image_name = image_name.replace(format_, "_result" + format_)
-    cv2.imwrite(SAMPLE_IMAGE_PATH + result_image_name, image)
+    while True:
+        frame = vs.read()
+        frame = imutils.resize(frame, height=480, width=640)        # TODO change regard to hardware capabilities
+        image = imutils.rotate_bound(frame, 90)                     # TODO: I am using webcam so I rotated my webcam and input image to get 3/4 aspect ratio
 
+        result = check_image(image)
+        if result is False:
+            break
+
+        image_bbox = model_test.get_bbox(image)
+        prediction = np.zeros((1, 3))
+        test_speed = 0
+        # sum the prediction from single model's result
+        for model_name in os.listdir(model_dir):
+            h_input, w_input, model_type, scale = parse_model_name(model_name)
+            param = {
+                "org_img": image,
+                "bbox": image_bbox,
+                "scale": scale,
+                "out_w": w_input,
+                "out_h": h_input,
+                "crop": True,
+            }
+            if scale is None:
+                param["crop"] = False
+            img = image_cropper.crop(**param)
+            start = time.time()
+            prediction += model_test.predict(img, os.path.join(model_dir, model_name))
+            test_speed += time.time()-start
+
+        # draw result of prediction
+        label = np.argmax(prediction)
+        value = prediction[0][label]/2
+        if label == 1:
+            if value < confirence:
+                print(f'Low confirence - {value}')
+                continue
+
+            print("Image is Real Face. Score: {:.2f}.".format(value))
+            result_text = "RealFace Score: {:.2f}".format(value)
+            color = (0, 255, 0)
+        else:
+            print("Image is Fake Face. Score: {:.2f}.".format(value))
+            result_text = "FakeFace Score: {:.2f}".format(value)
+            color = (0, 0, 255)
+        print("Prediction cost {:.2f} s".format(test_speed))
+        cv2.rectangle(
+            image,
+            (image_bbox[0], image_bbox[1]),
+            (image_bbox[0] + image_bbox[2], image_bbox[1] + image_bbox[3]),
+            color, 2)
+        cv2.putText(
+            image,
+            result_text,
+            (image_bbox[0], image_bbox[1] - 5),
+            cv2.FONT_HERSHEY_COMPLEX, 0.5*image.shape[0]/1024, color)
+
+        cv2.imshow("Result", image)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+        
+    # do a bit of cleanup
+    cv2.destroyAllWindows()
+    vs.stop()
 
 if __name__ == "__main__":
     desc = "test"
@@ -103,7 +118,21 @@ if __name__ == "__main__":
     parser.add_argument(
         "--image_name",
         type=str,
-        default="image_F1.jpg",
+        required=False,
         help="image used to test")
+    parser.add_argument(
+        '--input',
+        type=int,
+        required=False,
+        default=0,
+        help="camera device id"
+    )
+    parser.add_argument(
+        '--confirence',
+        required=False,
+        type=float,
+        default=0.9,
+        help="minimum confirence for liveness detection"
+    )
     args = parser.parse_args()
-    test(args.image_name, args.model_dir, args.device_id)
+    run(args.input, args.model_dir, args.device_id, args.confirence)

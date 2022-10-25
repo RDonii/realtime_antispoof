@@ -1,8 +1,9 @@
 easydict==1.9
+tensorboardX==2.0
 numpy==1.17.0
 tqdm==4.31.1
-torchvision==0.4.0
-torch==1.2.0
-opencv_python==4.2.0.34
-Pillow==7.1.2
-tensorboardX==2.0
+torchvision
+torch==1.12.1
+opencv_python==4.6.0.66
+Pillow==9.2.0
+imutils==0.5.4
